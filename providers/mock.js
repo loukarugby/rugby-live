@@ -39,4 +39,6 @@ async function getClassements() {
   };
 }
 
-module.exports = { getMatchs, getClassements };
+const getClassement = async cle => (await getClassements())[cle];
+
+module.exports = { getMatchs, getClassement };

@@ -10,19 +10,32 @@ const LIGUES = {
   sixnations: { id: +process.env.SIXNATIONS_LEAGUE_ID || 51, season: +process.env.SIXNATIONS_SEASON || 2026 },
 };
 
-let jour = null, compteur = 0;
+let jour = null, compteur = 0, restantes = null, jourRestantes = null;
+const RESERVE = 5; // on garde quelques requêtes en réserve
+const jourUTC = () => new Date().toISOString().slice(0, 10); // le quota d'API-Sports repart à 0 h UTC
+
 async function appel(chemin, params) {
-  const aujourdhui = new Date().toISOString().slice(0, 10);
-  if (jour !== aujourdhui) { jour = aujourdhui; compteur = 0; }
+  const auj = jourUTC();
+  if (jour !== auj) { jour = auj; compteur = 0; }
+  if (jourRestantes !== auj) restantes = null;
+  // Le fournisseur nous dit lui-même combien de requêtes il reste : on s'y fie en priorité.
+  if (restantes !== null && restantes <= RESERVE) throw new Error(`Quota API-Sports presque épuisé (${restantes} requêtes restantes aujourd’hui)`);
   if (compteur >= MAX) throw new Error('Budget de requêtes du jour atteint');
   compteur++;
   const url = new URL(BASE + chemin);
   Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
   const r = await fetch(url, { headers: { 'x-apisports-key': KEY } });
+  const rest = r.headers.get('x-ratelimit-requests-remaining');
+  if (rest !== null && rest !== '' && !Number.isNaN(+rest)) { restantes = +rest; jourRestantes = auj; }
   if (!r.ok) throw new Error('API-Sports : HTTP ' + r.status);
   const j = await r.json();
+  // API-Sports répond souvent "200 OK" avec une liste vide ET un message d'erreur : on le remonte.
+  const erreurs = Array.isArray(j.errors) ? j.errors : Object.values(j.errors || {});
+  if (erreurs.length) throw new Error('API-Sports : ' + erreurs.join(' | '));
   return j.response || [];
 }
+
+const etat = () => ({ requetesRestantesChezApiSports: restantes, requetesEnvoyeesDepuisDemarrage: compteur, plafondLocal: MAX });
 
 const EN_DIRECT = ['1H', 'HT', '2H', 'ET', 'BT', 'PT'];
 const TERMINE = ['FT', 'AET', 'AOT', 'AWD'];
@@ -53,8 +66,10 @@ async function getMatchs() {
   return out;
 }
 
-async function classement({ id, season }) {
-  const groupes = await appel('/standings', { league: id, season });
+async function getClassement(cle) {
+  const ligue = LIGUES[cle];
+  if (!ligue) throw new Error('Compétition inconnue : ' + cle);
+  const groupes = await appel('/standings', { league: ligue.id, season: ligue.season });
   const vus = new Map(); // une équipe peut apparaître dans plusieurs phases : on garde la première ligne
   for (const r of groupes.flat()) {
     const nom = r.team?.name;
@@ -63,12 +78,8 @@ async function classement({ id, season }) {
       n: r.games?.draw?.total, p: r.games?.lose?.total, pts: r.points,
     });
   }
+  if (!vus.size) throw new Error(`Classement vide pour ${cle} (saison ${ligue.season}, ligue ${ligue.id}) : vérifie l’identifiant et la saison`);
   return [...vus.values()].sort((a, b) => a.rang - b.rang);
 }
 
-async function getClassements() {
-  const [top14, prod2, sixnations] = await Promise.all([classement(LIGUES.top14), classement(LIGUES.prod2), classement(LIGUES.sixnations)]);
-  return { top14, prod2, sixnations };
-}
-
-module.exports = { getMatchs, getClassements };
+module.exports = { getMatchs, getClassement, etat };

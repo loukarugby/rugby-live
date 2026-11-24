@@ -1,21 +1,25 @@
 // Frontend : demande les données à NOTRE backend (/api/...) et les affiche.
 const COMPS = [['top14', 'Top 14'], ['prod2', 'Pro D2'], ['france', 'XV de France']];
-let comp = 'top14', vue = 'matchs', matchs = null, classements = null, maj = null, erreur = false;
+let comp = 'top14', vue = 'matchs', matchs = null, classements = {}, classErr = {}, maj = null, erreur = false;
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 async function charger(url) {
   const r = await fetch(url);
-  if (!r.ok) throw new Error(r.status);
-  return r.json();
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.erreur || r.status);
+  return j;
 }
 async function majMatchs() {
   try { const j = await charger('/api/matchs'); matchs = j.competitions; maj = new Date(j.majServeur); erreur = false; }
   catch { erreur = true; }
   render();
 }
-async function majClassements() {
-  try { classements = await charger('/api/classements'); } catch { /* on garde l'ancien */ }
+const cleClass = () => comp === 'france' ? 'sixnations' : comp;
+async function majClassement() {
+  const k = cleClass();
+  try { classements[k] = await charger('/api/classements?comp=' + k); classErr[k] = null; }
+  catch (e) { classErr[k] = e.message; }
   render();
 }
 
@@ -42,12 +46,13 @@ function tableau(rows, qual) {
 
 function render() {
   onglets($('#comp'), COMPS, comp, k => { comp = k; vue = 'matchs'; render(); });
-  onglets($('#vue'), [['matchs', 'Matchs du jour'], ['classement', comp === 'france' ? 'Six Nations' : 'Classement']], vue, k => { vue = k; render(); });
+  onglets($('#vue'), [['matchs', 'Matchs du jour'], ['classement', comp === 'france' ? 'Six Nations' : 'Classement']], vue, k => { vue = k; render(); if (k === 'classement') majClassement(); });
 
   let h = '';
   if (vue === 'classement') {
-    const rows = classements?.[comp === 'france' ? 'sixnations' : comp];
-    h = rows?.length ? tableau(rows, { top14: 6, prod2: 2, france: 1 }[comp]) : '<div class="vide">Classement indisponible pour le moment.</div>';
+    const k = cleClass(), rows = classements[k];
+    h = rows?.length ? tableau(rows, { top14: 6, prod2: 2, france: 1 }[comp])
+      : `<div class="vide">${classErr[k] ? 'Classement indisponible : ' + esc(classErr[k]) : 'Chargement…'}</div>`;
   } else if (matchs) {
     const liste = matchs[comp] || [];
     if (!liste.length) h = '<div class="vide">Aucun match aujourd’hui. Consulte le classement ou reviens un jour de match.</div>';
@@ -66,9 +71,9 @@ function render() {
 }
 
 // Polling : toutes les 30 s tant que l'appli est visible (le serveur, lui, protège le quota grâce à son cache).
-majMatchs(); majClassements();
+majMatchs();
 setInterval(() => { if (document.visibilityState === 'visible') majMatchs(); }, 30000);
-setInterval(majClassements, 10 * 60 * 1000);
+setInterval(() => { if (vue === 'classement' && document.visibilityState === 'visible') majClassement(); }, 10 * 60 * 1000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') majMatchs(); });
 addEventListener('online', majMatchs); addEventListener('offline', render);
 
