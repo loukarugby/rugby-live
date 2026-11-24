@@ -125,15 +125,29 @@ async function postJSON(url, corps) {
 }
 const envoyerAbonnement = (sub, test) => postJSON('/api/push/abonner', { subscription: sub.toJSON(), equipe: stock.lire('equipeFavorite'), test: !!test });
 
+let equipes = null, equipesEnCours = false; // { top14: [...], prod2: [...], complet }
+const notifBloquee = () => typeof Notification !== 'undefined' && Notification.permission === 'denied';
+
 function renderNotif() {
   const fav = stock.lire('equipeFavorite');
-  $('#notifTitre').textContent = '🔔 Notification du match en direct' + (notif.abonne ? ` · activée${fav ? ' (' + fav + ')' : ''}` : '');
-  const b = $('#notifBtn');
-  b.textContent = notif.abonne ? 'Désactiver la notification' : 'Activer la notification';
-  b.className = notif.abonne ? 'off' : '';
-  b.disabled = notif.occupe || !notif.support || !notif.serveur?.actif;
+  const cloche = $('#cloche'), sel = $('#fav');
+  cloche.classList.toggle('on', notif.abonne);
+  cloche.title = notif.abonne ? 'Notification activée' + (fav ? ' · ' + fav : '') : 'Notification désactivée';
+
+  // Menu : « Désactivée », « sans favori », puis les clubs du Top 14, puis ceux de la Pro D2 (jamais d'équipe nationale)
+  const opt = (v, t) => `<option value="${esc(v)}">${esc(t)}</option>`;
+  const groupe = (nom, l) => l?.length ? `<optgroup label="${nom}">${l.map(n => opt(n, n)).join('')}</optgroup>` : '';
+  let h = opt('', '🔕 Désactivée') + opt('*', '🔔 Match en direct (sans équipe favorite)');
+  if (fav && ![...(equipes?.top14 || []), ...(equipes?.prod2 || [])].includes(fav)) h += `<optgroup label="Mon équipe">${opt(fav, fav)}</optgroup>`;
+  sel.innerHTML = h + groupe('Top 14', equipes?.top14) + groupe('Pro D2', equipes?.prod2);
+  sel.value = notif.abonne ? (fav || '*') : '';
+  sel.disabled = notif.occupe || !notif.support || !notif.serveur?.actif || notifBloquee();
+
   $('#notifMsg').textContent = notif.msg
-    || (notif.abonne ? 'Active : elle se met à jour toute seule à chaque score, même appli fermée.' : '');
+    || (notifBloquee() ? 'Notifications bloquées : autorise-les pour ce site dans les réglages du téléphone.'
+      : equipesEnCours ? 'Chargement des équipes…'
+      : notif.abonne ? 'Active : mise à jour à chaque score, même appli fermée.'
+      : notif.support && notif.serveur?.actif ? 'Choisis ton équipe pour activer la notification.' : '');
 }
 
 async function initNotif() {
@@ -183,24 +197,46 @@ async function couperNotif() {
   notif.occupe = false; renderNotif();
 }
 
-let equipesOk = false;
-async function remplirEquipes() {
-  if (equipesOk) return;
-  equipesOk = true; // une seule tentative à la fois ; réessayée à la prochaine ouverture si elle échoue
-  try {
-    $('#equipes').innerHTML = (await charger('/api/equipes')).map(n => `<option value="${esc(n)}">`).join('');
-  } catch { equipesOk = false; }
+// Prévient le serveur que l'équipe favorite a changé.
+async function resynchroniser() {
+  try { const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription(); if (sub) await envoyerAbonnement(sub); }
+  catch { /* réessayé à la prochaine ouverture de l'appli */ }
 }
 
-$('#notifBtn').onclick = () => notif.abonne ? couperNotif() : activerNotif();
-$('#fav').value = stock.lire('equipeFavorite');
-$('#fav').addEventListener('focus', remplirEquipes);
+// Liste des clubs (demandée au serveur à l'ouverture du menu ; le serveur la garde en cache 12 h).
+async function remplirEquipes() {
+  if (equipes?.complet || equipesEnCours) return;
+  equipesEnCours = true; renderNotif();
+  try {
+    equipes = await charger('/api/equipes');
+    const fav = stock.lire('equipeFavorite');
+    if (equipes.complet && fav && ![...equipes.top14, ...equipes.prod2].includes(fav)) {
+      stock.ecrire('equipeFavorite', ''); // ex. une équipe nationale choisie dans une ancienne version : plus possible
+      if (notif.abonne) resynchroniser();
+    }
+  } catch { /* réessayé à la prochaine ouverture du menu */ }
+  equipesEnCours = false; renderNotif();
+}
+
+function ouvrirMenu(ouvert) {
+  $('#menuNotif').hidden = !ouvert;
+  $('#cloche').setAttribute('aria-expanded', String(ouvert));
+  if (ouvert) remplirEquipes();
+}
+$('#cloche').addEventListener('click', () => {
+  const ouvrir = $('#menuNotif').hidden;
+  ouvrirMenu(ouvrir);
+  // Le toucher sur la cloche est le bon moment pour demander l'autorisation (obligatoire sur iPhone : il faut un geste)
+  if (ouvrir && notif.support && notif.serveur?.actif && Notification.permission === 'default') Notification.requestPermission().then(renderNotif).catch(() => {});
+});
+document.addEventListener('click', e => { if (!$('#menuNotif').hidden && !e.target.closest('#menuNotif, #cloche')) ouvrirMenu(false); });
+addEventListener('keydown', e => { if (e.key === 'Escape') ouvrirMenu(false); });
+
 $('#fav').addEventListener('change', async () => {
-  stock.ecrire('equipeFavorite', $('#fav').value.trim());
-  renderNotif();
-  if (notif.abonne) { // on prévient le serveur du changement d'équipe
-    try { const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription(); if (sub) await envoyerAbonnement(sub); } catch { /* réessayé à la prochaine ouverture */ }
-  }
+  const v = $('#fav').value;
+  if (v === '') { if (notif.abonne) await couperNotif(); return; }
+  stock.ecrire('equipeFavorite', v === '*' ? '' : v);
+  if (notif.abonne) { renderNotif(); await resynchroniser(); } else await activerNotif();
 });
 
 // Polling : toutes les 30 s tant que l'appli est visible (le serveur, lui, protège le quota grâce à son cache).

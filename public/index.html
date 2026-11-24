@@ -46,32 +46,40 @@ h3.jour{font:600 14px system-ui,sans-serif;color:var(--mut);margin:14px 0 6px;di
 h3.jour::first-letter{text-transform:uppercase}
 .m.ft .sc small{color:var(--mut)}
 .petit{color:var(--mut);font-size:13px;margin:6px 0 0}
-.notif{background:var(--card);border:1px solid var(--bd);border-radius:10px;margin:0 0 12px;padding:0 12px}
-.notif summary{cursor:pointer;padding:11px 0;font-weight:600}
-.notif .corps{display:grid;gap:8px;padding:0 0 12px}
-.notif label{font-size:14px;color:var(--mut);display:grid;gap:4px}
-.notif input{font:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:9px 10px;width:100%}
-.notif button{font:600 15px system-ui,sans-serif;padding:10px;border-radius:8px;border:1px solid var(--ac);background:var(--ac);color:var(--acx);cursor:pointer}
-.notif button.off{background:transparent;color:var(--tx);border-color:var(--bd)}
-.notif button:disabled{opacity:.5}
+.top{position:relative;display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0 4px}
+.top h1{margin:0}
+.actions{display:flex;align-items:center;gap:10px}
+.logo{width:42px;height:42px;border-radius:11px;display:block}
+.cloche{position:relative;width:42px;height:42px;border-radius:50%;border:1px solid var(--bd);background:var(--card);color:var(--tx);cursor:pointer;display:grid;place-items:center;padding:0}
+.cloche svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.cloche.on{color:var(--ac);border-color:var(--ac)}
+.cloche.on svg{fill:currentColor}
+.cloche.on::after{content:"";position:absolute;top:7px;right:8px;width:9px;height:9px;border-radius:50%;background:var(--live);border:2px solid var(--card)}
+.menu{position:absolute;right:0;top:calc(100% + 6px);z-index:5;width:min(300px,100%);background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px;box-shadow:0 8px 24px rgba(0,0,0,.18)}
+.menu[hidden]{display:none}
+.menu label{display:block;font-weight:600;font-size:14px;margin-bottom:8px}
+.menu select{font:inherit;width:100%;color:var(--tx);background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:10px}
+.menu select:disabled{opacity:.5}
 .aide{margin:0;font-size:13px;color:var(--mut)}
 </style>
 </head>
 <body>
 <main>
-<h1>Rugby en direct</h1>
-<p class="sub" id="statut">Chargement…</p>
-<details class="notif" id="notif">
-  <summary id="notifTitre">🔔 Notification du match en direct</summary>
-  <div class="corps">
-    <label>Équipe favorite (son match s’affiche en priorité s’il y a plusieurs matchs)
-      <input id="fav" list="equipes" placeholder="ex. Toulouse" autocomplete="off" maxlength="60">
-    </label>
-    <datalist id="equipes"></datalist>
-    <button id="notifBtn" type="button" disabled>Activer la notification</button>
+<header class="top">
+  <h1>Rugby en direct</h1>
+  <div class="actions">
+    <button id="cloche" class="cloche" type="button" aria-label="Notification du match en direct" aria-haspopup="true" aria-expanded="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 9H3c0-1 3-2 3-9z"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>
+    </button>
+    <img class="logo" src="/icon-192.png" width="42" height="42" alt="">
+  </div>
+  <div class="menu" id="menuNotif" hidden>
+    <label for="fav">Notification du match en direct</label>
+    <select id="fav" disabled><option value="">Chargement…</option></select>
     <p class="aide" id="notifMsg"></p>
   </div>
-</details>
+</header>
+<p class="sub" id="statut">Chargement…</p>
 <nav id="comp" role="tablist" aria-label="Compétition"></nav>
 <nav id="vue" class="sec" role="tablist" aria-label="Vue"></nav>
 <section id="out" aria-live="polite"></section>

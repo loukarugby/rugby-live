@@ -102,17 +102,27 @@ app.get('/api/classements', async (req, res) => {
   res.json(c.donnees);
 });
 
-// Liste des équipes pour choisir son équipe favorite. Elle réutilise les classements en cache
-// (déjà demandés pour l'onglet Classement), et n'est appelée que quand on ouvre la case « équipe favorite ».
+// Équipes que l'on peut choisir en favori : clubs du Top 14, puis de la Pro D2 (jamais d'équipe nationale).
+// Elle réutilise les classements en cache (les mêmes que l'onglet Classement : au plus 1 requête par
+// compétition toutes les 12 h) et n'est appelée que quand on ouvre le menu de la cloche.
+// Si un classement est indisponible, on se rabat sur les équipes des matchs du jour de cette compétition.
 app.get('/api/equipes', async (req, res) => {
-  const noms = new Set(['France']);
+  const equipes = { top14: new Set(), prod2: new Set() };
+  let complet = true;
   for (const cle of ['top14', 'prod2']) {
     const c = await lireClassement(cle);
-    (c.donnees || []).forEach(r => r.equipe && noms.add(r.equipe));
+    if (c.donnees?.length) c.donnees.forEach(r => r.equipe && equipes[cle].add(r.equipe));
+    else {
+      complet = false;
+      (caches.matchs?.donnees?.[cle] || []).forEach(x => { equipes[cle].add(x.home); equipes[cle].add(x.away); });
+    }
   }
-  const m = caches.matchs?.donnees;
-  if (m) Object.values(m).flat().forEach(x => { noms.add(x.home); noms.add(x.away); });
-  res.json([...noms].filter(Boolean).sort((a, b) => a.localeCompare(b, 'fr')));
+  const trier = set => [...set].filter(Boolean).sort((a, b) => a.localeCompare(b, 'fr'));
+  res.json({
+    top14: trier(equipes.top14),
+    prod2: trier(equipes.prod2).filter(n => !equipes.top14.has(n)),
+    complet,
+  });
 });
 
 // --- Notifications ---

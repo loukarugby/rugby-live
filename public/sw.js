@@ -1,6 +1,6 @@
 // Service worker : rend l'appli installable et utilisable hors connexion.
 // Si tu modifies index.html ou app.js, change le numéro de version pour forcer la mise à jour.
-const VERSION = 'rugby-v3';
+const VERSION = 'rugby-v4';
 const COQUE = ['/', '/index.html', '/app.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', e => {
