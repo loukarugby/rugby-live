@@ -4,9 +4,13 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 
-const reel = Boolean(process.env.API_SPORTS_KEY);
-const provider = require(reel ? './providers/apisports' : './providers/mock');
-console.log(reel ? 'Source : API-Sports' : 'Source : données fictives (aucune clé API)');
+// Choix de la source : Highlightly si sa clé est présente, sinon API-Sports, sinon données fictives.
+let nomSource, provider;
+if (process.env.HIGHLIGHTLY_API_KEY) { nomSource = 'Highlightly'; provider = require('./providers/highlightly'); }
+else if (process.env.API_SPORTS_KEY) { nomSource = 'API-Sports'; provider = require('./providers/apisports'); }
+else { nomSource = 'données fictives'; provider = require('./providers/mock'); }
+const reel = nomSource !== 'données fictives';
+console.log(reel ? 'Source : ' + nomSource : 'Source : données fictives (aucune clé API : HIGHLIGHTLY_API_KEY absente)');
 
 const S = n => n * 1000;
 const LIVE_S = +process.env.REFRESH_LIVE_S || (reel ? 300 : 10); // pendant un match
@@ -77,7 +81,7 @@ app.get('/api/etat', (req, res) => {
   for (const [nom, c] of Object.entries(caches)) {
     resume[nom] = { misAJour: c.at ? new Date(c.at).toISOString() : null, erreur: c.erreur };
   }
-  res.json({ source: reel ? 'API-Sports' : 'données fictives', requetes: provider.etat ? provider.etat() : null, caches: resume });
+  res.json({ source: nomSource, requetes: provider.etat ? provider.etat() : null, caches: resume });
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
