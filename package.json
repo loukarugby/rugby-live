@@ -1,0 +1,9 @@
+{
+  "name": "rugby-live",
+  "version": "1.0.0",
+  "description": "PWA de résultats rugby (Top 14, Pro D2, XV de France) avec backend Node.js",
+  "main": "server.js",
+  "scripts": { "start": "node server.js", "dev": "node --watch server.js" },
+  "engines": { "node": ">=18" },
+  "dependencies": { "dotenv": "^16.4.5", "express": "^4.19.2" }
+}
