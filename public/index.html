@@ -41,12 +41,37 @@ th:nth-child(-n+2),td:nth-child(-n+2){text-align:left}
 th{font-weight:600;color:var(--mut);font-size:13px}
 tr:last-child td{border-bottom:0}td:last-child{font-weight:700}
 .qual td:first-child{box-shadow:inset 4px 0 var(--ac)}
+h2 small{font-weight:400;font-size:13px;margin-left:6px}
+h3.jour{font:600 14px system-ui,sans-serif;color:var(--mut);margin:14px 0 6px;display:block}
+h3.jour::first-letter{text-transform:uppercase}
+.m.ft .sc small{color:var(--mut)}
+.petit{color:var(--mut);font-size:13px;margin:6px 0 0}
+.notif{background:var(--card);border:1px solid var(--bd);border-radius:10px;margin:0 0 12px;padding:0 12px}
+.notif summary{cursor:pointer;padding:11px 0;font-weight:600}
+.notif .corps{display:grid;gap:8px;padding:0 0 12px}
+.notif label{font-size:14px;color:var(--mut);display:grid;gap:4px}
+.notif input{font:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:9px 10px;width:100%}
+.notif button{font:600 15px system-ui,sans-serif;padding:10px;border-radius:8px;border:1px solid var(--ac);background:var(--ac);color:var(--acx);cursor:pointer}
+.notif button.off{background:transparent;color:var(--tx);border-color:var(--bd)}
+.notif button:disabled{opacity:.5}
+.aide{margin:0;font-size:13px;color:var(--mut)}
 </style>
 </head>
 <body>
 <main>
 <h1>Rugby en direct</h1>
 <p class="sub" id="statut">Chargement…</p>
+<details class="notif" id="notif">
+  <summary id="notifTitre">🔔 Notification du match en direct</summary>
+  <div class="corps">
+    <label>Équipe favorite (son match s’affiche en priorité s’il y a plusieurs matchs)
+      <input id="fav" list="equipes" placeholder="ex. Toulouse" autocomplete="off" maxlength="60">
+    </label>
+    <datalist id="equipes"></datalist>
+    <button id="notifBtn" type="button" disabled>Activer la notification</button>
+    <p class="aide" id="notifMsg"></p>
+  </div>
+</details>
 <nav id="comp" role="tablist" aria-label="Compétition"></nav>
 <nav id="vue" class="sec" role="tablist" aria-label="Vue"></nav>
 <section id="out" aria-live="polite"></section>

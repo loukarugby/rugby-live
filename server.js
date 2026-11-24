@@ -1,8 +1,10 @@
 // Backend : va chercher les données chez le fournisseur, les garde en cache,
-// et les sert à la PWA via sa propre petite API.
+// et les sert à la PWA via sa propre petite API. Envoie aussi les notifications du match en direct.
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
+const notifs = require('./notifications');
+const { creerHistorique } = require('./historique');
 
 // Choix de la source : Highlightly si sa clé est présente, sinon API-Sports, sinon données fictives.
 let nomSource, provider;
@@ -20,19 +22,30 @@ const RETRY_S = +process.env.RETRY_AFTER_ERROR_S || 600;         // pause après
 
 const jourParis = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' });
 
+// Pendant un match on rafraîchit toutes les LIVE_S secondes... sauf si le quota du jour fond :
+// on espace alors les rafraîchissements pour tenir jusqu'à la fin de la journée.
+function secondesLive() {
+  const b = provider.budget && provider.budget();
+  if (!b) return LIVE_S;
+  if (b.restant <= 20) return Math.max(LIVE_S, 1200);
+  if (b.restant <= 40) return Math.max(LIVE_S, 600);
+  return LIVE_S;
+}
+
 // Durée de vie du cache des matchs (économise les requêtes) :
 // - un match est en cours, ou va commencer dans moins de 5 min : on rafraîchit souvent
 // - sinon on "dort" jusqu'à 5 min avant le prochain coup d'envoi (au plus IDLE_S)
+// (et le fournisseur ne redemande que les compétitions concernées : voir providers/highlightly.js)
 function ttlMatchs(c) {
   const maintenant = Date.now();
   const liste = Object.values(c.donnees).flat();
-  if (liste.some(m => m.status === 'live')) return S(LIVE_S);
+  if (liste.some(m => m.status === 'live')) return S(secondesLive());
   const delais = liste.filter(m => m.status === 'up')
     .map(m => new Date(m.start) - maintenant)
     .filter(d => d > -2 * 3600e3); // un match "à venir" depuis plus de 2 h : reporté, on l'ignore
   if (!delais.length) return S(IDLE_S);
   const prochain = Math.min(...delais);
-  if (prochain <= 5 * 60e3) return S(LIVE_S);
+  if (prochain <= 5 * 60e3) return S(secondesLive());
   return Math.min(S(IDLE_S), (maintenant - c.at) + prochain - 5 * 60e3);
 }
 
@@ -48,7 +61,9 @@ async function lire(nom, charger, ttl, verifierJour) {
   if (frais) return c;
   if (c.erreur && maintenant - c.essai < S(RETRY_S)) return c;
   if (!enCours[nom]) {
-    enCours[nom] = charger()
+    // on donne au fournisseur ce qu'on sait déjà d'aujourd'hui, pour qu'il ne redemande que le nécessaire
+    const precedent = c.donnees && c.jour === jourParis() ? c.donnees : null;
+    enCours[nom] = charger(precedent)
       .then(d => { c.donnees = d; c.at = Date.now(); c.jour = jourParis(); c.erreur = null; })
       .catch(e => { c.erreur = e.message; console.error(`[${nom}]`, e.message); })
       .finally(() => { c.essai = Date.now(); enCours[nom] = null; });
@@ -57,12 +72,24 @@ async function lire(nom, charger, ttl, verifierJour) {
   return c;
 }
 
+const lireMatchs = () => lire('matchs', precedent => provider.getMatchs(precedent), ttlMatchs, true);
+const lireClassement = cle => lire('classement-' + cle, () => provider.getClassement(cle), () => S(CLASS_S));
+
+const historique = creerHistorique({ provider, jourParis });
+notifs.init();
+
 const app = express();
 
 app.get('/api/matchs', async (req, res) => {
-  const c = await lire('matchs', provider.getMatchs, ttlMatchs, true);
+  const c = await lireMatchs();
   if (!c.donnees || c.jour !== jourParis()) return res.status(503).json({ erreur: c.erreur || 'Données indisponibles' });
   res.json({ majServeur: new Date(c.at).toISOString(), competitions: c.donnees });
+});
+
+// Résultats de la semaine passée : demandés une seule fois par semaine, puis servis depuis la mémoire.
+app.get('/api/historique', (req, res) => {
+  if (!provider.getJournee) return res.status(501).json({ erreur: 'Historique indisponible avec cette source de données' });
+  res.json(historique.lire());
 });
 
 // Un classement à la fois (?comp=top14 | prod2 | sixnations) : on ne dépense une requête
@@ -70,10 +97,44 @@ app.get('/api/matchs', async (req, res) => {
 app.get('/api/classements', async (req, res) => {
   const cle = String(req.query.comp || '');
   if (!['top14', 'prod2', 'sixnations'].includes(cle)) return res.status(400).json({ erreur: 'Compétition inconnue' });
-  const c = await lire('classement-' + cle, () => provider.getClassement(cle), () => S(CLASS_S));
+  const c = await lireClassement(cle);
   if (!c.donnees) return res.status(503).json({ erreur: c.erreur || 'Données indisponibles' });
   res.json(c.donnees);
 });
+
+// Liste des équipes pour choisir son équipe favorite. Elle réutilise les classements en cache
+// (déjà demandés pour l'onglet Classement), et n'est appelée que quand on ouvre la case « équipe favorite ».
+app.get('/api/equipes', async (req, res) => {
+  const noms = new Set(['France']);
+  for (const cle of ['top14', 'prod2']) {
+    const c = await lireClassement(cle);
+    (c.donnees || []).forEach(r => r.equipe && noms.add(r.equipe));
+  }
+  const m = caches.matchs?.donnees;
+  if (m) Object.values(m).flat().forEach(x => { noms.add(x.home); noms.add(x.away); });
+  res.json([...noms].filter(Boolean).sort((a, b) => a.localeCompare(b, 'fr')));
+});
+
+// --- Notifications ---
+app.get('/api/push/config', (req, res) => res.json(notifs.config()));
+
+app.post('/api/push/abonner', express.json({ limit: '10kb' }), (req, res) => {
+  const r = notifs.abonner(req.body?.subscription, req.body?.equipe);
+  if (r.erreur) return res.status(400).json({ erreur: r.erreur });
+  res.json({ ok: true });
+  if (req.body?.test) { // on vient d'appuyer sur « Activer » : message de confirmation
+    const c = caches.matchs;
+    notifs.bienvenue(r.entree, c && c.jour === jourParis() ? c.donnees : null).catch(e => console.error('[notifications]', e.message));
+  }
+});
+
+app.post('/api/push/desabonner', express.json({ limit: '10kb' }), (req, res) => {
+  notifs.desabonner(String(req.body?.endpoint || ''));
+  res.json({ ok: true });
+});
+
+// Ne dépense aucune requête chez le fournisseur : sert à garder le serveur éveillé (voir README).
+app.get('/api/ping', (req, res) => res.type('text').send('ok'));
 
 // Page de diagnostic : ouvre /api/etat dans le navigateur pour voir les erreurs et les requêtes restantes.
 app.get('/api/etat', (req, res) => {
@@ -81,10 +142,35 @@ app.get('/api/etat', (req, res) => {
   for (const [nom, c] of Object.entries(caches)) {
     resume[nom] = { misAJour: c.at ? new Date(c.at).toISOString() : null, erreur: c.erreur };
   }
-  res.json({ source: nomSource, requetes: provider.etat ? provider.etat() : null, caches: resume });
+  res.json({
+    source: nomSource, requetes: provider.etat ? provider.etat() : null, caches: resume,
+    historique: provider.getJournee ? historique.diagnostic() : null,
+    notifications: { actives: notifs.actif(), abonnes: notifs.nombre() },
+  });
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Tâche de fond (toutes les 30 s) :
+//  - efface l'historique quand la semaine est écoulée ;
+//  - s'il y a des abonnés aux notifications, met les matchs à jour (le cache décide s'il faut vraiment
+//    interroger le fournisseur) et envoie les notifications utiles.
+setInterval(async () => {
+  try {
+    historique.verifierSemaine();
+    if (!notifs.actif() || !notifs.nombre()) return;
+    const c = await lireMatchs();
+    if (c.donnees && c.jour === jourParis()) await notifs.diffuser(c.donnees);
+  } catch (e) { console.error('[tâche de fond]', e.message); }
+}, 30000);
+
+// Render (offre gratuite) endort le serveur après 15 min sans visite : plus de notifications dans ce cas.
+// Tant que quelqu'un est abonné, le serveur s'appelle donc lui-même toutes les 10 min pour rester éveillé.
+// (désactivable avec KEEP_AWAKE=non ; RENDER_EXTERNAL_URL est fournie automatiquement par Render)
+const URL_PUBLIQUE = process.env.RENDER_EXTERNAL_URL;
+if (URL_PUBLIQUE && process.env.KEEP_AWAKE !== 'non') {
+  setInterval(() => { if (notifs.nombre()) fetch(URL_PUBLIQUE + '/api/ping').catch(() => {}); }, 10 * 60e3);
+}
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Serveur prêt : http://localhost:${PORT}`));

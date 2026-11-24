@@ -1,6 +1,7 @@
 // Frontend : demande les données à NOTRE backend (/api/...) et les affiche.
 const COMPS = [['top14', 'Top 14'], ['prod2', 'Pro D2'], ['france', 'XV de France']];
 let comp = 'top14', vue = 'matchs', matchs = null, classements = {}, classErr = {}, maj = null, erreur = false;
+let histo = null, histoErr = null, histoAt = 0; // résultats de la semaine passée
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -13,6 +14,12 @@ async function charger(url) {
 async function majMatchs() {
   try { const j = await charger('/api/matchs'); matchs = j.competitions; maj = new Date(j.majServeur); erreur = false; }
   catch { erreur = true; }
+  render();
+}
+// Le serveur ne demande l'historique au fournisseur qu'une fois par semaine : ici on ne fait que le relire chez lui.
+async function majHistorique() {
+  try { histo = await charger('/api/historique'); histoErr = null; histoAt = Date.now(); }
+  catch (e) { histoErr = e.message; }
   render();
 }
 const cleClass = () => comp === 'france' ? 'sixnations' : comp;
@@ -32,16 +39,43 @@ function onglets(el, items, courant, fn) {
   });
 }
 
-function ligne(m) {
-  const heure = new Date(m.start).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+function ligne(m, avecLigue) {
+  const heure = new Date(m.start).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Paris' });
   const centre = m.status === 'up' ? heure : m.status === 'autre' ? '–' : `${esc(m.scoreHome)} - ${esc(m.scoreAway)}`;
-  const pied = m.status === 'live' ? `● ${esc(m.label)}` : esc(m.label);
+  const pied = m.status === 'live' ? `● ${esc(m.label)}` : esc(m.label) + (avecLigue && m.league ? ` · ${esc(m.league)}` : '');
   return `<div class="m ${esc(m.status)}"><div class="t">${esc(m.home)}</div><div class="sc">${centre}<small>${pied}</small></div><div class="t a">${esc(m.away)}</div></div>`;
 }
 
 function tableau(rows, qual) {
   return `<div class="wrap"><table><thead><tr><th>#</th><th>Équipe</th><th>J</th><th>G</th><th>N</th><th>P</th><th>Pts</th></tr></thead><tbody>${
     rows.map((r, i) => `<tr class="${i < qual ? 'qual' : ''}"><td>${esc(r.rang)}</td><td>${esc(r.equipe)}</td><td>${esc(r.j)}</td><td>${esc(r.g)}</td><td>${esc(r.n)}</td><td>${esc(r.p)}</td><td>${esc(r.pts)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+// --- Résultats de la semaine passée (sous les matchs du jour) ---
+const dateParis = iso => new Date(iso).toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' });
+const jourLong = iso => new Date(iso).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Paris' });
+const jourCourt = ymd => new Date(ymd + 'T12:00:00Z').toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+
+function sectionHistorique() {
+  const periode = histo?.semaine ? ` <small>${esc(jourCourt(histo.semaine.debut))} → ${esc(jourCourt(histo.semaine.fin))}</small>` : '';
+  let h = `<h2>Résultats de la semaine passée${periode}</h2>`;
+  const liste = histo?.competitions?.[comp] || [];
+  if (liste.length) {
+    for (const j of [...new Set(liste.map(m => dateParis(m.start)))]) {
+      const duJour = liste.filter(m => dateParis(m.start) === j);
+      h += `<h3 class="jour">${esc(jourLong(duJour[0].start))}</h3>` + duJour.map(m => ligne(m, comp === 'france')).join('');
+    }
+  } else if (!histo) {
+    h += `<div class="vide">${histoErr ? 'Résultats indisponibles pour le moment (' + esc(histoErr) + ').' : 'Chargement…'}</div>`;
+  } else if (histo.complet) {
+    h += '<div class="vide">Aucun match la semaine passée dans cette compétition.</div>';
+  } else {
+    h += `<div class="vide">${histo.enCours ? 'Chargement des résultats…' : 'Résultats pas encore disponibles.'}</div>`;
+  }
+  if (histo && !histo.complet && liste.length) {
+    h += `<p class="petit">${histo.enCours ? 'Chargement des autres jours…' : 'Résultats partiels : la suite sera demandée un peu plus tard.'}</p>`;
+  }
+  return h;
 }
 
 function render() {
@@ -53,13 +87,16 @@ function render() {
     const k = cleClass(), rows = classements[k];
     h = rows?.length ? tableau(rows, { top14: 6, prod2: 2, france: 1 }[comp])
       : `<div class="vide">${classErr[k] ? 'Classement indisponible : ' + esc(classErr[k]) : 'Chargement…'}</div>`;
-  } else if (matchs) {
-    const liste = matchs[comp] || [];
-    if (!liste.length) h = '<div class="vide">Aucun match aujourd’hui. Consulte le classement ou reviens un jour de match.</div>';
-    else if (comp === 'france') {
-      const groupes = [...new Set(liste.map(m => m.league))];
-      h = groupes.map(g => `<h2>${esc(g)}</h2>` + liste.filter(m => m.league === g).map(ligne).join('')).join('');
-    } else h = liste.map(ligne).join('');
+  } else {
+    if (matchs) {
+      const liste = matchs[comp] || [];
+      if (!liste.length) h = '<div class="vide">Aucun match aujourd’hui. Consulte le classement ou reviens un jour de match.</div>';
+      else if (comp === 'france') {
+        const groupes = [...new Set(liste.map(m => m.league))];
+        h = groupes.map(g => `<h2>${esc(g)}</h2>` + liste.filter(m => m.league === g).map(m => ligne(m)).join('')).join('');
+      } else h = liste.map(m => ligne(m)).join('');
+    }
+    h += sectionHistorique();
   }
   $('#out').innerHTML = h;
 
@@ -70,11 +107,111 @@ function render() {
     : `${nb ? `<b>● ${nb} match${nb > 1 ? 's' : ''} en direct</b> · ` : ''}mis à jour à ${heure}`;
 }
 
+// --- Notification permanente du match en direct (Web Push) ---
+const stock = {
+  lire: k => { try { return localStorage.getItem(k) || ''; } catch { return ''; } },
+  ecrire: (k, v) => { try { localStorage.setItem(k, v); } catch { /* stockage indisponible */ } },
+};
+const notif = { support: false, serveur: null, abonne: false, occupe: false, msg: '' };
+
+function cleVersOctets(b64) {
+  const s = (b64 + '='.repeat((4 - b64.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/');
+  return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+}
+
+async function postJSON(url, corps) {
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corps) });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).erreur || r.status);
+}
+const envoyerAbonnement = (sub, test) => postJSON('/api/push/abonner', { subscription: sub.toJSON(), equipe: stock.lire('equipeFavorite'), test: !!test });
+
+function renderNotif() {
+  const fav = stock.lire('equipeFavorite');
+  $('#notifTitre').textContent = '🔔 Notification du match en direct' + (notif.abonne ? ` · activée${fav ? ' (' + fav + ')' : ''}` : '');
+  const b = $('#notifBtn');
+  b.textContent = notif.abonne ? 'Désactiver la notification' : 'Activer la notification';
+  b.className = notif.abonne ? 'off' : '';
+  b.disabled = notif.occupe || !notif.support || !notif.serveur?.actif;
+  $('#notifMsg').textContent = notif.msg
+    || (notif.abonne ? 'Active : elle se met à jour toute seule à chaque score, même appli fermée.' : '');
+}
+
+async function initNotif() {
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const installee = navigator.standalone || matchMedia('(display-mode: standalone)').matches;
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+    notif.msg = ios && !installee
+      ? 'Sur iPhone : ajoute d’abord l’appli à l’écran d’accueil (Partager → « Sur l’écran d’accueil »), puis ouvre-la depuis son icône.'
+      : 'Ce navigateur ne sait pas afficher de notifications.';
+    return renderNotif();
+  }
+  notif.support = true;
+  try { notif.serveur = await charger('/api/push/config'); }
+  catch { notif.msg = 'Serveur injoignable pour le moment.'; return renderNotif(); }
+  if (!notif.serveur.actif) { notif.msg = 'Notifications pas encore configurées sur le serveur (clés VAPID : voir le README).'; return renderNotif(); }
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+  notif.abonne = !!sub && Notification.permission === 'granted';
+  renderNotif();
+  // À chaque ouverture on "réinscrit" l'abonnement : si le serveur a redémarré et tout oublié, c'est réparé.
+  if (notif.abonne) envoyerAbonnement(sub).catch(() => {});
+}
+
+async function activerNotif() {
+  notif.occupe = true; notif.msg = ''; renderNotif();
+  try {
+    if (await Notification.requestPermission() !== 'granted') throw new Error('permission refusée : autorise les notifications pour ce site dans les réglages du téléphone');
+    const reg = await navigator.serviceWorker.ready;
+    const cle = cleVersOctets(notif.serveur.cle);
+    let sub = await reg.pushManager.getSubscription();
+    const memeCle = s => { const k = s.options?.applicationServerKey; return !k || (k.byteLength === cle.length && new Uint8Array(k).every((v, i) => v === cle[i])); };
+    if (sub && !memeCle(sub)) { await sub.unsubscribe(); sub = null; } // clés VAPID changées côté serveur
+    sub = sub || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: cle });
+    await envoyerAbonnement(sub, true);
+    notif.abonne = true;
+  } catch (e) { notif.msg = 'Impossible d’activer : ' + e.message; }
+  notif.occupe = false; renderNotif();
+}
+
+async function couperNotif() {
+  notif.occupe = true; notif.msg = ''; renderNotif();
+  try {
+    const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
+    if (sub) { await postJSON('/api/push/desabonner', { endpoint: sub.endpoint }).catch(() => {}); await sub.unsubscribe(); }
+    notif.abonne = false;
+  } catch (e) { notif.msg = 'Impossible de désactiver : ' + e.message; }
+  notif.occupe = false; renderNotif();
+}
+
+let equipesOk = false;
+async function remplirEquipes() {
+  if (equipesOk) return;
+  equipesOk = true; // une seule tentative à la fois ; réessayée à la prochaine ouverture si elle échoue
+  try {
+    $('#equipes').innerHTML = (await charger('/api/equipes')).map(n => `<option value="${esc(n)}">`).join('');
+  } catch { equipesOk = false; }
+}
+
+$('#notifBtn').onclick = () => notif.abonne ? couperNotif() : activerNotif();
+$('#fav').value = stock.lire('equipeFavorite');
+$('#fav').addEventListener('focus', remplirEquipes);
+$('#fav').addEventListener('change', async () => {
+  stock.ecrire('equipeFavorite', $('#fav').value.trim());
+  renderNotif();
+  if (notif.abonne) { // on prévient le serveur du changement d'équipe
+    try { const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription(); if (sub) await envoyerAbonnement(sub); } catch { /* réessayé à la prochaine ouverture */ }
+  }
+});
+
 // Polling : toutes les 30 s tant que l'appli est visible (le serveur, lui, protège le quota grâce à son cache).
+// L'historique, lui, n'est relu que tant qu'il est incomplet, puis toutes les 6 h (changement de semaine).
+const historiqueAJour = () => histo?.complet && Date.now() - histoAt < 6 * 3600e3;
 majMatchs();
-setInterval(() => { if (document.visibilityState === 'visible') majMatchs(); }, 30000);
+majHistorique();
+initNotif();
+setInterval(() => { if (document.visibilityState === 'visible') { majMatchs(); if (!historiqueAJour()) majHistorique(); } }, 30000);
 setInterval(() => { if (vue === 'classement' && document.visibilityState === 'visible') majClassement(); }, 10 * 60 * 1000);
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') majMatchs(); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { majMatchs(); if (!historiqueAJour()) majHistorique(); } });
 addEventListener('online', majMatchs); addEventListener('offline', render);
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');

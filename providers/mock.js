@@ -29,6 +29,25 @@ async function getMatchs() {
   return out;
 }
 
+// Historique fictif : quelques matchs terminés les jeudi/vendredi/samedi/dimanche pour le jour demandé.
+const EQUIPES = {
+  top14: ['Toulouse', 'Racing 92', 'Stade Français', 'Montpellier', 'La Rochelle', 'Toulon', 'Bordeaux-Bègles', 'Clermont'],
+  prod2: ['Perpignan', 'Biarritz', 'Provence Rugby', 'Oyonnax', 'Vannes', 'Colomiers'],
+};
+async function getJournee(date, groupe) {
+  const jourSemaine = new Date(date + 'T12:00:00Z').getUTCDay(); // 0 = dimanche … 6 = samedi
+  const graine = [...date].reduce((a, c) => a + c.charCodeAt(0), 0);
+  const match = (i, league, home, away, heure) => ({
+    id: `h-${date}-${groupe}-${i}`, league, home, away,
+    scoreHome: 10 + ((graine * (i + 3)) % 25), scoreAway: 8 + ((graine * (i + 5)) % 22),
+    status: 'ft', label: 'Terminé', start: `${date}T${heure}:00+01:00`,
+  });
+  if (groupe === 'france') return jourSemaine === 6 ? [match(0, 'Tournée d’automne', 'France', 'Australie', '21:10')] : [];
+  const noms = EQUIPES[groupe], ligue = groupe === 'top14' ? 'Top 14' : 'Pro D2';
+  const nb = { 4: 1, 5: 2, 6: 3, 0: 2 }[jourSemaine] || 0;
+  return Array.from({ length: nb }, (_, i) => match(i, ligue, noms[(2 * i + graine) % noms.length], noms[(2 * i + 1 + graine) % noms.length], ['15:00', '17:30', '21:05'][i]));
+}
+
 const ligne = (equipe, j, g, n, p, pts) => ({ equipe, j, g, n, p, pts });
 async function getClassements() {
   const tri = rows => rows.sort((a, b) => b.pts - a.pts).map((r, i) => ({ rang: i + 1, ...r }));
@@ -41,4 +60,4 @@ async function getClassements() {
 
 const getClassement = async cle => (await getClassements())[cle];
 
-module.exports = { getMatchs, getClassement };
+module.exports = { getMatchs, getJournee, getClassement };

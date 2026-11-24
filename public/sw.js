@@ -1,6 +1,6 @@
 // Service worker : rend l'appli installable et utilisable hors connexion.
 // Si tu modifies index.html ou app.js, change le numéro de version pour forcer la mise à jour.
-const VERSION = 'rugby-v2';
+const VERSION = 'rugby-v3';
 const COQUE = ['/', '/index.html', '/app.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -14,6 +14,31 @@ self.addEventListener('activate', e => {
       .then(cles => Promise.all(cles.filter(k => k !== VERSION).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
+});
+
+// Notification envoyée par le serveur (même appli fermée) : on l'affiche.
+// Le "tag" fait que chaque nouvelle notification remplace la précédente : une seule notification qui se met à jour.
+self.addEventListener('push', e => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch { d = { title: 'Rugby en direct', body: e.data ? e.data.text() : '' }; }
+  e.waitUntil(self.registration.showNotification(d.title || 'Rugby en direct', {
+    body: d.body || '',
+    tag: d.tag || 'rugby-live',
+    icon: '/icon-192.png',
+    silent: !!d.silent,
+    renotify: !!d.renotify && !d.silent,
+    requireInteraction: !!d.requireInteraction,
+    data: { url: d.url || '/' },
+  }));
+});
+
+// Un appui sur la notification ouvre (ou ramène au premier plan) l'appli.
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(fenetres => {
+    const ouverte = fenetres.find(c => 'focus' in c);
+    return ouverte ? ouverte.focus() : self.clients.openWindow((e.notification.data && e.notification.data.url) || '/');
+  }));
 });
 
 self.addEventListener('fetch', e => {
