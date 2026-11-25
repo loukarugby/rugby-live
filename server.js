@@ -5,6 +5,7 @@ const express = require('express');
 const path = require('path');
 const notifs = require('./notifications');
 const { creerHistorique } = require('./historique');
+const { creerClassements } = require('./classements');
 
 // Choix de la source : Highlightly si sa clé est présente, sinon API-Sports, sinon données fictives.
 let nomSource, provider;
@@ -17,7 +18,6 @@ console.log(reel ? 'Source : ' + nomSource : 'Source : données fictives (aucune
 const S = n => n * 1000;
 const LIVE_S = +process.env.REFRESH_LIVE_S || (reel ? 300 : 10); // pendant un match
 const IDLE_S = +process.env.REFRESH_IDLE_S || 3600;              // plafond hors match
-const CLASS_S = +process.env.REFRESH_STANDINGS_S || 43200;       // classements : 12 h
 const RETRY_S = +process.env.RETRY_AFTER_ERROR_S || 600;         // pause après une erreur
 
 const jourParis = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' });
@@ -72,8 +72,31 @@ async function lire(nom, charger, ttl, verifierJour) {
   return c;
 }
 
-const lireMatchs = () => lire('matchs', precedent => provider.getMatchs(precedent), ttlMatchs, true);
-const lireClassement = cle => lire('classement-' + cle, () => provider.getClassement(cle), () => S(CLASS_S));
+const classements = creerClassements();
+// On retrouve les classements sauvegardés (si le disque a survécu au redémarrage)
+for (const [cle, v] of Object.entries(classements.relire())) {
+  caches['classement-' + cle] = { donnees: v.donnees, at: v.at, essai: 0, erreur: null, jour: null };
+}
+classements.lier(caches);
+
+// À chaque mise à jour des matchs, on note ceux qui sont terminés : ils rendent le classement périmé (voir classements.js).
+const lireMatchs = () => lire('matchs', precedent => provider.getMatchs(precedent).then(d => { classements.noterMatchs(d); return d; }), ttlMatchs, true);
+
+// Un classement est gardé tant qu'aucun match de sa compétition n'est terminé depuis : plus de renouvellement toutes les 12 h.
+async function lireClassement(cle) {
+  const nom = 'classement-' + cle;
+  const avant = caches[nom]?.at;
+  const c = await lire(nom, async () => {
+    const ancien = caches[nom];
+    const pourUnMatch = !!ancien && classements.perimeParMatch(cle, ancien, Date.now());
+    const anciennes = ancien?.donnees;
+    const nouvelles = await provider.getClassement(cle);
+    classements.apres(cle, anciennes, nouvelles, pourUnMatch);
+    return nouvelles;
+  }, c => classements.perime(cle, c) ? 0 : Number.MAX_SAFE_INTEGER);
+  if (c.at !== avant) classements.sauver();
+  return c;
+}
 
 const historique = creerHistorique({ provider, jourParis });
 notifs.init();
@@ -110,7 +133,9 @@ app.get('/api/equipes', async (req, res) => {
   const equipes = { top14: new Set(), prod2: new Set() };
   let complet = true;
   for (const cle of ['top14', 'prod2']) {
-    const c = await lireClassement(cle);
+    // La liste des clubs ne change pas à la fin d'un match : on prend le classement en cache, même "périmé"
+    const enCache = caches['classement-' + cle];
+    const c = enCache?.donnees?.length ? enCache : await lireClassement(cle);
     if (c.donnees?.length) c.donnees.forEach(r => r.equipe && equipes[cle].add(r.equipe));
     else {
       complet = false;
@@ -155,6 +180,7 @@ app.get('/api/etat', (req, res) => {
   res.json({
     source: nomSource, requetes: provider.etat ? provider.etat() : null, caches: resume,
     historique: provider.getJournee ? historique.diagnostic() : null,
+    classements: classements.diagnostic(),
     notifications: { actives: notifs.actif(), abonnes: notifs.nombre() },
   });
 });
