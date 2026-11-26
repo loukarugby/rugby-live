@@ -4,7 +4,7 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const notifs = require('./notifications');
-const { creerHistorique } = require('./historique');
+const { creerCalendrier } = require('./calendrier');
 const { creerClassements } = require('./classements');
 
 // Choix de la source : Highlightly si sa clé est présente, sinon API-Sports, sinon données fictives.
@@ -72,6 +72,7 @@ async function lire(nom, charger, ttl, verifierJour) {
   return c;
 }
 
+const calendrier = creerCalendrier({ provider });
 const classements = creerClassements();
 // On retrouve les classements sauvegardés (si le disque a survécu au redémarrage)
 for (const [cle, v] of Object.entries(classements.relire())) {
@@ -79,8 +80,9 @@ for (const [cle, v] of Object.entries(classements.relire())) {
 }
 classements.lier(caches);
 
-// À chaque mise à jour des matchs, on note ceux qui sont terminés : ils rendent le classement périmé (voir classements.js).
-const lireMatchs = () => lire('matchs', precedent => provider.getMatchs(precedent).then(d => { classements.noterMatchs(d); return d; }), ttlMatchs, true);
+// À chaque mise à jour des matchs : on note ceux qui sont terminés (ils rendent le classement périmé, voir classements.js)
+// et on recopie leurs scores dans le calendrier de la saison (voir calendrier.js) : sans aucune requête de plus.
+const lireMatchs = () => lire('matchs', precedent => provider.getMatchs(precedent).then(d => { classements.noterMatchs(d); calendrier.fusionner(d); return d; }), ttlMatchs, true);
 
 // Un classement est gardé tant qu'aucun match de sa compétition n'est terminé depuis : plus de renouvellement toutes les 12 h.
 async function lireClassement(cle) {
@@ -98,7 +100,6 @@ async function lireClassement(cle) {
   return c;
 }
 
-const historique = creerHistorique({ provider, jourParis });
 notifs.init();
 
 const app = express();
@@ -109,10 +110,13 @@ app.get('/api/matchs', async (req, res) => {
   res.json({ majServeur: new Date(c.at).toISOString(), competitions: c.donnees });
 });
 
-// Résultats de la semaine passée : demandés une seule fois par semaine, puis servis depuis la mémoire.
-app.get('/api/historique', (req, res) => {
-  if (!provider.getJournee) return res.status(501).json({ erreur: 'Historique indisponible avec cette source de données' });
-  res.json(historique.lire());
+// Calendrier et résultats de toute la saison d'une compétition (?comp=top14 | prod2 | france).
+// Renvoie tout de suite ce qu'on a ; si une mise à jour est nécessaire elle part en arrière-plan (enCours: true).
+app.get('/api/calendrier', (req, res) => {
+  const comp = String(req.query.comp || '');
+  if (!calendrier.groupes.includes(comp)) return res.status(400).json({ erreur: 'Compétition inconnue' });
+  if (!provider.getCalendrier) return res.status(501).json({ erreur: 'Calendrier indisponible avec cette source de données' });
+  res.json(calendrier.lire(comp));
 });
 
 // Un classement à la fois (?comp=top14 | prod2 | sixnations) : on ne dépense une requête
@@ -179,7 +183,7 @@ app.get('/api/etat', (req, res) => {
   }
   res.json({
     source: nomSource, requetes: provider.etat ? provider.etat() : null, caches: resume,
-    historique: provider.getJournee ? historique.diagnostic() : null,
+    calendrier: provider.getCalendrier ? calendrier.diagnostic() : null,
     classements: classements.diagnostic(),
     notifications: { actives: notifs.actif(), abonnes: notifs.nombre() },
   });
@@ -188,12 +192,10 @@ app.get('/api/etat', (req, res) => {
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Tâche de fond (toutes les 30 s) :
-//  - efface l'historique quand la semaine est écoulée ;
 //  - s'il y a des abonnés aux notifications, met les matchs à jour (le cache décide s'il faut vraiment
 //    interroger le fournisseur) et envoie les notifications utiles.
 setInterval(async () => {
   try {
-    historique.verifierSemaine();
     if (!notifs.actif() || !notifs.nombre()) return;
     const c = await lireMatchs();
     if (c.donnees && c.jour === jourParis()) await notifs.diffuser(c.donnees);

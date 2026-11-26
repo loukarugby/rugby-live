@@ -10,12 +10,13 @@
 <link rel="apple-touch-icon" href="/icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <style>
-:root{--bg:#f2f4ee;--card:#fff;--tx:#14201a;--mut:#5d6b62;--ac:#1d5c36;--acx:#fff;--live:#d93a26;--bd:#dde2d8;--fr:#1f3f8f;
+:root{--bg:#f2f4ee;--card:#fff;--tx:#14201a;--mut:#5d6b62;--ac:#1d5c36;--acx:#fff;--live:#d93a26;--bd:#dde2d8;--fr:#1f3f8f;--v1:rgba(242,244,238,.55);--v2:rgba(242,244,238,.94);
 box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
-@media (prefers-color-scheme:dark){:root{--bg:#0e1511;--card:#16201a;--tx:#eef2ec;--mut:#98a89d;--ac:#5fc27f;--acx:#0e1511;--live:#ff6a52;--bd:#27342b;--fr:#7fa2ff}}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1511;--card:#16201a;--tx:#eef2ec;--mut:#98a89d;--ac:#5fc27f;--acx:#0e1511;--live:#ff6a52;--bd:#27342b;--fr:#7fa2ff;--v1:rgba(14,21,17,.78);--v2:rgba(14,21,17,.96)}}
 *,*::before,*::after{box-sizing:inherit}
 html{height:100%}
 body{margin:0;min-height:100%;background:var(--bg);color:var(--tx);font:400 16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+body::before{content:"";position:fixed;inset:0;z-index:-1;background:linear-gradient(to bottom,var(--v1) 0,var(--v2) 70%),url(/fond.webp) center top/cover no-repeat}
 main{max-width:640px;margin:0 auto;padding:16px 14px 40px}
 h1{font:800 28px/1.1 system-ui,sans-serif;margin:8px 0 4px}
 .sub{color:var(--mut);font-size:14px;margin:0 0 14px}
@@ -23,7 +24,7 @@ h1{font:800 28px/1.1 system-ui,sans-serif;margin:8px 0 4px}
 nav{display:flex;gap:6px;margin-bottom:10px}
 nav button{flex:1;font:600 15px system-ui,sans-serif;padding:9px 6px;border-radius:999px;border:1px solid var(--bd);background:var(--card);color:var(--tx);cursor:pointer}
 nav button[aria-selected="true"]{background:var(--ac);color:var(--acx);border-color:var(--ac)}
-nav.sec button{border-radius:6px;font-weight:400;padding:6px}
+nav.sec button{border-radius:6px;font-weight:400;padding:8px 4px;font-size:14px;white-space:nowrap}
 nav.sec button[aria-selected="true"]{background:var(--tx);color:var(--bg);border-color:var(--tx)}
 button:focus-visible{outline:3px solid var(--fr);outline-offset:2px}
 h2{font:700 17px system-ui,sans-serif;margin:18px 0 8px;color:var(--mut)}
@@ -61,6 +62,11 @@ h3.jour::first-letter{text-transform:uppercase}
 .menu select{font:inherit;width:100%;color:var(--tx);background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:10px}
 .menu select:disabled{opacity:.5}
 .aide{margin:0;font-size:13px;color:var(--mut)}
+.pager{display:grid;grid-template-columns:46px 1fr 46px;gap:8px;margin:4px 0 6px}
+.pager button{font:700 22px/1 system-ui,sans-serif;border:1px solid var(--bd);background:var(--card);color:var(--tx);border-radius:10px;cursor:pointer;padding:0}
+.pager button:disabled{opacity:.35;cursor:default}
+.pager select{font:600 15px system-ui,sans-serif;color:var(--tx);background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:10px;width:100%;min-width:0}
+.saison{color:var(--mut);font-size:13px;margin:0 0 4px}
 </style>
 </head>
 <body>

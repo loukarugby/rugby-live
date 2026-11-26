@@ -82,6 +82,7 @@ function normaliser(g) {
     scoreHome: Number.isFinite(sh) ? sh : 0, scoreAway: Number.isFinite(sa) ? sa : 0, status,
     label: status === 'live' ? EN_DIRECT[d] : status === 'ft' ? 'Terminé' : status === 'up' ? 'À venir' : (AUTRES[d] || d || '—'),
     start: g.date,
+    journee: g.week ? String(g.week) : undefined, // numéro de journée (championnats)
   };
 }
 
@@ -91,7 +92,7 @@ async function matchsDuJour(params, date = new Date().toLocaleDateString('sv-SE'
   return j.data || [];
 }
 
-// Un "groupe" = top14, prod2 ou france (home + away). Renvoie les matchs normalisés d'un jour.
+// Un "groupe" = top14, prod2 ou france (home + away). Renvoie les matchs normalisés d'un jour (aujourd'hui par défaut).
 async function matchsGroupe(groupe, date) {
   if (groupe === 'france') {
     // XV de France : tous les matchs où la France joue (à domicile ou à l'extérieur)
@@ -124,8 +125,64 @@ async function getMatchs(precedent) {
   return out;
 }
 
-// Pour l'historique de la semaine passée : les matchs d'un jour précis pour un groupe.
-const getJournee = (date, groupe) => matchsGroupe(groupe, date);
+// --- Calendrier d'une saison (résultats + matchs à venir) ---------------------------------------------
+// Sans date, /matches renvoie TOUS les matchs de la ligue, du plus récent au plus ancien (ceux à venir en premier).
+// Une page de 100 matchs contient donc déjà presque toute la saison en cours : on lit les pages une à une
+// et on s'arrête dès qu'on tombe sur la saison précédente. Coût réel : 1 à 3 requêtes par compétition.
+const MAX_PAGES = +process.env.CALENDRIER_MAX_PAGES || 4;
+
+// La saison "en cours" = celle du match le plus proche d'aujourd'hui (passé ou futur).
+function saisonCourante(matchs) {
+  let meilleur = null;
+  for (const m of matchs) {
+    const saison = Number(m.league?.season);
+    if (!Number.isFinite(saison)) continue;
+    const ecart = Math.abs(new Date(m.date) - Date.now());
+    if (!meilleur || ecart < meilleur.ecart) meilleur = { saison, ecart };
+  }
+  return meilleur ? meilleur.saison : null;
+}
+
+async function calendrierLigue(groupe) {
+  const { id } = await infosLigue(groupe);
+  const recus = new Map();
+  let saison = null;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const j = await appel('/matches', { leagueId: id, limit: 100, offset: page * 100 });
+    const data = j.data || [];
+    data.forEach(m => recus.set(m.id, m));
+    saison = saisonCourante([...recus.values()]);
+    const total = j.pagination?.totalCount;
+    const saisonPrecedenteAtteinte = saison !== null && data.some(m => Number(m.league?.season) < saison);
+    if (data.length < 100 || saisonPrecedenteAtteinte || (Number.isFinite(total) && (page + 1) * 100 >= total)) break;
+  }
+  if (saison === null) throw new Error(`Aucun match trouvé pour ${LIGUES[groupe].nom} (ligue ${id})`);
+  return { saison, matchs: [...recus.values()].filter(m => Number(m.league?.season) === saison).map(normaliser) };
+}
+
+// XV de France : pas de ligue unique (Six Nations, tests d'automne, tournées...). On demande ses matchs à domicile
+// puis à l'extérieur (2 requêtes, la page la plus récente suffit) et on garde la saison du 1er juillet au 30 juin.
+async function calendrierFrance() {
+  const n = new Date();
+  const annee = n.getUTCMonth() >= 6 ? n.getUTCFullYear() : n.getUTCFullYear() - 1;
+  const debut = Date.UTC(annee, 6, 1), fin = Date.UTC(annee + 1, 6, 1);
+  const france = x => String(x?.name || '').trim().toLowerCase() === 'france'; // exactement "France" (pas les -20 ans, etc.)
+  const recus = new Map();
+  for (const p of [{ homeTeamName: 'France' }, { awayTeamName: 'France' }]) {
+    const j = await appel('/matches', { ...p, limit: 100 });
+    for (const g of j.data || []) {
+      const t = new Date(g.date).getTime();
+      if ((france(g.homeTeam) || france(g.awayTeam)) && t >= debut && t < fin) recus.set(g.id, g);
+    }
+  }
+  return { saison: annee, matchs: [...recus.values()].map(normaliser) };
+}
+
+function getCalendrier(groupe) {
+  if (groupe === 'france') return calendrierFrance();
+  if (groupe === 'top14' || groupe === 'prod2') return calendrierLigue(groupe);
+  throw new Error('Compétition inconnue : ' + groupe);
+}
 
 async function getClassement(cle) {
   if (!LIGUES[cle]) throw new Error('Compétition inconnue : ' + cle);
@@ -146,4 +203,4 @@ async function getClassement(cle) {
   throw new Error(`Classement vide pour ${LIGUES[cle].nom} (ligue ${id}, saisons ${saisons.slice(0, 2).join(' / ')})`);
 }
 
-module.exports = { getMatchs, getJournee, getClassement, etat, budget };
+module.exports = { getMatchs, getCalendrier, getClassement, etat, budget };
