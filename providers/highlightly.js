@@ -73,6 +73,8 @@ const TERMINE = ['Finished', 'Finished after extra time', 'Awarded'];
 const EN_DIRECT = { 'First half': '1re mi-temps', 'Half time': 'Mi-temps', 'Second half': '2e mi-temps', 'Extra time': 'Prolongation', 'Break time': 'Pause', Penalties: 'Tirs au but' };
 const AUTRES = { Postponed: 'Reporté', Suspended: 'Suspendu', Interrupted: 'Interrompu', Cancelled: 'Annulé', Abandoned: 'Abandonné', 'To be announced': 'À confirmer', Unknown: '—' };
 
+const https = u => (typeof u === 'string' && u.startsWith('https://') ? u : undefined); // on n'affiche que des logos en https
+
 function normaliser(g) {
   const d = g.state?.description;
   const status = d in EN_DIRECT ? 'live' : TERMINE.includes(d) ? 'ft' : d === 'Not started' ? 'up' : 'autre';
@@ -82,6 +84,7 @@ function normaliser(g) {
     scoreHome: Number.isFinite(sh) ? sh : 0, scoreAway: Number.isFinite(sa) ? sa : 0, status,
     label: status === 'live' ? EN_DIRECT[d] : status === 'ft' ? 'Terminé' : status === 'up' ? 'À venir' : (AUTRES[d] || d || '—'),
     start: g.date,
+    logoHome: https(g.homeTeam?.logo), logoAway: https(g.awayTeam?.logo),
     journee: g.week ? String(g.week) : undefined, // numéro de journée (championnats)
   };
 }

@@ -1,6 +1,6 @@
 // Service worker : rend l'appli installable et utilisable hors connexion.
 // Si tu modifies index.html ou app.js, change le numéro de version pour forcer la mise à jour.
-const VERSION = 'rugby-v5';
+const VERSION = 'rugby-v6';
 const COQUE = ['/', '/index.html', '/app.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/fond.webp'];
 
 self.addEventListener('install', e => {
@@ -21,7 +21,11 @@ self.addEventListener('activate', e => {
 self.addEventListener('push', e => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch { d = { title: 'Rugby en direct', body: e.data ? e.data.text() : '' }; }
-  e.waitUntil(self.registration.showNotification(d.title || 'Rugby en direct', {
+  // Pastille sur l'icône (iPhone installé sur l'écran d'accueil, Android, ordinateur) = nombre de matchs en direct
+  const pastille = typeof d.badge === 'number' && self.navigator && 'setAppBadge' in self.navigator
+    ? (d.badge > 0 ? self.navigator.setAppBadge(d.badge) : self.navigator.clearAppBadge()).catch(() => {})
+    : null;
+  e.waitUntil(Promise.all([pastille, self.registration.showNotification(d.title || 'Rugby en direct', {
     body: d.body || '',
     tag: d.tag || 'rugby-live',
     icon: '/icon-192.png',
@@ -29,7 +33,7 @@ self.addEventListener('push', e => {
     renotify: !!d.renotify && !d.silent,
     requireInteraction: !!d.requireInteraction,
     data: { url: d.url || '/' },
-  }));
+  })]));
 });
 
 // Un appui sur la notification ouvre (ou ramène au premier plan) l'appli.

@@ -158,7 +158,7 @@ app.get('/api/equipes', async (req, res) => {
 app.get('/api/push/config', (req, res) => res.json(notifs.config()));
 
 app.post('/api/push/abonner', express.json({ limit: '10kb' }), (req, res) => {
-  const r = notifs.abonner(req.body?.subscription, req.body?.equipe);
+  const r = notifs.abonner(req.body?.subscription, req.body?.equipes ?? req.body?.equipe, req.body?.champs);
   if (r.erreur) return res.status(400).json({ erreur: r.erreur });
   res.json({ ok: true });
   if (req.body?.test) { // on vient d'appuyer sur « Activer » : message de confirmation

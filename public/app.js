@@ -3,6 +3,8 @@ const COMPS = [['top14', 'Top 14'], ['prod2', 'Pro D2'], ['france', 'XV de Franc
 let comp = 'top14', vue = 'matchs', matchs = null, classements = {}, classErr = {}, maj = null, erreur = false;
 let cal = {}, calErr = {}, calAt = {}, journeeChoisie = {}; // calendrier de la saison, par compétition
 const $ = s => document.querySelector(s);
+const TOUS_CHAMPS = [['top14', 'Top 14'], ['prod2', 'Pro D2'], ['france', 'XV de France']];
+const MAX_FAVORIS = 8;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 async function charger(url) {
@@ -12,7 +14,7 @@ async function charger(url) {
   return j;
 }
 async function majMatchs() {
-  try { const j = await charger('/api/matchs'); matchs = j.competitions; maj = new Date(j.majServeur); erreur = false; }
+  try { const j = await charger('/api/matchs'); matchs = j.competitions; maj = new Date(j.majServeur); erreur = false; majPastille(); }
   catch { erreur = true; }
   render();
 }
@@ -45,7 +47,8 @@ function ligne(m, avecLigue) {
   const heure = new Date(m.start).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Paris' });
   const centre = m.status === 'up' ? heure : m.status === 'autre' ? '–' : `${esc(m.scoreHome)} - ${esc(m.scoreAway)}`;
   const pied = m.status === 'live' ? `● ${esc(m.label)}` : esc(m.label) + (avecLigue && m.league ? ` · ${esc(m.league)}` : '');
-  return `<div class="m ${esc(m.status)}"><div class="t">${esc(m.home)}</div><div class="sc">${centre}<small>${pied}</small></div><div class="t a">${esc(m.away)}</div></div>`;
+  const lg = u => u ? `<img class="lg" src="${esc(u)}" alt="" width="24" height="24" loading="lazy" onerror="this.remove()">` : '';
+  return `<div class="m ${esc(m.status)}"><div class="t">${lg(m.logoHome)}<span>${esc(m.home)}</span></div><div class="sc">${centre}<small>${pied}</small></div><div class="t a">${lg(m.logoAway)}<span>${esc(m.away)}</span></div></div>`;
 }
 
 function tableau(rows, qual) {
@@ -143,6 +146,69 @@ function brancherCalendrier() {
   $('#selJournee')?.addEventListener('change', e => aller(+e.target.value));
 }
 
+// --- Réglages : équipes favorites (plusieurs) et championnats suivis, gardés dans le téléphone ---
+const lireListe = k => { try { const v = JSON.parse(stock.lire(k)); return Array.isArray(v) ? v : null; } catch { return null; } };
+function favoris() {
+  const l = lireListe('equipesFavorites');
+  if (l) return l;
+  const ancien = stock.lire('equipeFavorite'); // anciennes versions : une seule équipe
+  return ancien ? [ancien] : [];
+}
+const ecrireFavoris = l => stock.ecrire('equipesFavorites', JSON.stringify(l));
+const champsNotif = () => lireListe('champsNotif') || TOUS_CHAMPS.map(c => c[0]);
+
+// Même règle que le serveur pour reconnaître une équipe : sans accents ni majuscules, "contient".
+const normNom = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const joueur = (m, f) => [m.home, m.away].some(n => { const a = normNom(n); return a === f || (a.length >= 3 && f.includes(a)) || (f.length >= 3 && a.includes(f)); });
+
+// --- Carte « Prochain match de mon équipe » (aucune requête : calendrier + matchs du jour déjà reçus) ---
+function dansDelai(iso) {
+  const min = Math.round((new Date(iso) - Date.now()) / 60000);
+  if (min <= 0) return 'imminent';
+  if (min < 60) return `dans ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `dans ${h} h${min % 60 ? ' ' + String(min % 60).padStart(2, '0') : ''}`;
+  return `dans ${Math.floor(h / 24)} j${h % 24 ? ' ' + (h % 24) + ' h' : ''}`;
+}
+const majuscule = t => t.charAt(0).toUpperCase() + t.slice(1);
+
+function sectionProchains() {
+  const favs = favoris();
+  if (!favs.length) return '';
+  const duJour = new Map(Object.values(matchs || {}).flat().map(m => [m.id, m]));
+  const candidats = new Map();
+  for (const k of ['top14', 'prod2']) for (const m of cal[k]?.matchs || []) candidats.set(m.id, duJour.get(m.id) || m); // le match du jour est plus frais
+  for (const m of duJour.values()) candidats.set(m.id, m);
+  const limite = Date.now() - 3 * 3600e3;
+  const prochains = [...candidats.values()].filter(m => m.status === 'live' || (m.status === 'up' && new Date(m.start) > limite))
+    .sort((a, b) => new Date(a.start) - new Date(b.start));
+  const calendriersPrets = ['top14', 'prod2'].every(k => cal[k]?.complet);
+  const cartes = new Map(), sans = [];
+  for (const f of favs) {
+    const m = prochains.find(x => joueur(x, normNom(f)));
+    if (!m) { sans.push(f); continue; }
+    if (!cartes.has(m.id)) cartes.set(m.id, { m, noms: [] });
+    cartes.get(m.id).noms.push(f);
+  }
+  let h = `<h2>${favs.length > 1 ? 'Prochains matchs de mes équipes' : 'Prochain match de mon équipe'}</h2>`;
+  for (const { m, noms } of [...cartes.values()].sort((a, b) => new Date(a.m.start) - new Date(b.m.start))) {
+    const quand = m.status === 'live' ? '<b>● En direct</b>' : `${esc(majuscule(jourLong(m.start)))} · ${esc(dansDelai(m.start))}`;
+    h += `<div class="pro"><p class="qui">⭐ ${esc(noms.join(' · '))}</p>${ligne(m, true)}<p class="quand">${quand}</p></div>`;
+  }
+  if (sans.length) {
+    h += `<div class="vide">${calendriersPrets ? `Aucun prochain match connu pour ${esc(sans.join(', '))} (le calendrier n’est publié que jusqu’à une certaine journée).` : 'Chargement du calendrier…'}</div>`;
+  }
+  return h;
+}
+
+// --- Pastille sur l'icône de l'appli : nombre de matchs en direct (quand l'appli est fermée, c'est le serveur qui la met à jour) ---
+function majPastille() {
+  if (!matchs || !('setAppBadge' in navigator)) return;
+  const favs = favoris().map(normNom), champs = notif.abonne ? champsNotif() : TOUS_CHAMPS.map(c => c[0]);
+  const n = Object.entries(matchs).reduce((t, [k, l]) => t + l.filter(m => m.status === 'live' && (champs.includes(k) || favs.some(f => joueur(m, f)))).length, 0);
+  (n > 0 ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {}); // sur iPhone : nécessite l'autorisation des notifications
+}
+
 function render() {
   onglets($('#comp'), COMPS, comp, k => { comp = k; vue = 'matchs'; render(); if (!calendrierAJour(k)) majCalendrier(k); });
   onglets($('#vue'), [['matchs', 'Matchs du jour'], ['calendrier', 'Calendrier'], ['classement', comp === 'france' ? 'Six Nations' : 'Classement']], vue, k => { vue = k; render(); if (k === 'classement') majClassement(); if (k === 'calendrier' && !calendrierAJour(comp)) majCalendrier(); });
@@ -157,13 +223,15 @@ function render() {
     h = rows?.length ? tableau(rows, { top14: 6, prod2: 2, france: 1 }[comp])
       : `<div class="vide">${classErr[k] ? 'Classement indisponible : ' + esc(classErr[k]) : 'Chargement…'}</div>`;
   } else {
+    h += sectionProchains();
     if (matchs) {
+      h += `<h2>Matchs du jour</h2>`;
       const liste = matchs[comp] || [];
-      if (!liste.length) h = '<div class="vide">Aucun match aujourd’hui. Consulte le classement ou reviens un jour de match.</div>';
+      if (!liste.length) h += '<div class="vide">Aucun match aujourd’hui. Consulte le calendrier ou le classement.</div>';
       else if (comp === 'france') {
         const groupes = [...new Set(liste.map(m => m.league))];
-        h = groupes.map(g => `<h2>${esc(g)}</h2>` + liste.filter(m => m.league === g).map(m => ligne(m)).join('')).join('');
-      } else h = liste.map(m => ligne(m)).join('');
+        h += groupes.map(g => `<h3 class="jour">${esc(g)}</h3>` + liste.filter(m => m.league === g).map(m => ligne(m)).join('')).join('');
+      } else h += liste.map(m => ligne(m)).join('');
     }
     h += sectionDerniers();
   }
@@ -177,6 +245,7 @@ function render() {
 }
 
 // --- Notification permanente du match en direct (Web Push) ---
+const ecrireListe = (k, l) => stock.ecrire(k, JSON.stringify(l));
 const stock = {
   lire: k => { try { return localStorage.getItem(k) || ''; } catch { return ''; } },
   ecrire: (k, v) => { try { localStorage.setItem(k, v); } catch { /* stockage indisponible */ } },
@@ -192,31 +261,37 @@ async function postJSON(url, corps) {
   const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corps) });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).erreur || r.status);
 }
-const envoyerAbonnement = (sub, test) => postJSON('/api/push/abonner', { subscription: sub.toJSON(), equipe: stock.lire('equipeFavorite'), test: !!test });
+const envoyerAbonnement = (sub, test) => postJSON('/api/push/abonner', { subscription: sub.toJSON(), equipes: favoris(), champs: champsNotif(), test: !!test });
 
 let equipes = null, equipesEnCours = false; // { top14: [...], prod2: [...], complet }
 const notifBloquee = () => typeof Notification !== 'undefined' && Notification.permission === 'denied';
 
 function renderNotif() {
-  const fav = stock.lire('equipeFavorite');
-  const cloche = $('#cloche'), sel = $('#fav');
+  const favs = favoris(), champs = champsNotif();
+  const cloche = $('#cloche'), sel = $('#fav'), interrupteur = $('#notifOn');
   cloche.classList.toggle('on', notif.abonne);
-  cloche.title = notif.abonne ? 'Notification activée' + (fav ? ' · ' + fav : '') : 'Notification désactivée';
+  cloche.title = notif.abonne ? 'Notifications activées' + (favs.length ? ' · ' + favs.join(', ') : '') : 'Notifications désactivées';
 
-  // Menu : « Désactivée », « sans favori », puis les clubs du Top 14, puis ceux de la Pro D2 (jamais d'équipe nationale)
+  interrupteur.checked = notif.abonne;
+  interrupteur.disabled = notif.occupe || !notif.support || !notif.serveur?.actif || notifBloquee();
+  document.querySelectorAll('#champs input').forEach(i => { i.checked = champs.includes(i.dataset.champ); });
+
+  $('#favListe').innerHTML = favs.length
+    ? favs.map(n => `<span class="chip">${esc(n)}<button type="button" data-retirer="${esc(n)}" aria-label="Retirer ${esc(n)}">×</button></span>`).join('')
+    : '<span class="aide">Aucune équipe favorite pour l’instant.</span>';
+
+  // Menu d'ajout : les clubs du Top 14, puis ceux de la Pro D2 (jamais d'équipe nationale), sans ceux déjà choisis
   const opt = (v, t) => `<option value="${esc(v)}">${esc(t)}</option>`;
-  const groupe = (nom, l) => l?.length ? `<optgroup label="${nom}">${l.map(n => opt(n, n)).join('')}</optgroup>` : '';
-  let h = opt('', '🔕 Désactivée') + opt('*', '🔔 Match en direct (sans équipe favorite)');
-  if (fav && ![...(equipes?.top14 || []), ...(equipes?.prod2 || [])].includes(fav)) h += `<optgroup label="Mon équipe">${opt(fav, fav)}</optgroup>`;
-  sel.innerHTML = h + groupe('Top 14', equipes?.top14) + groupe('Pro D2', equipes?.prod2);
-  sel.value = notif.abonne ? (fav || '*') : '';
-  sel.disabled = notif.occupe || !notif.support || !notif.serveur?.actif || notifBloquee();
+  const groupe = (nom, l) => { const r = (l || []).filter(n => !favs.includes(n)); return r.length ? `<optgroup label="${nom}">${r.map(n => opt(n, n)).join('')}</optgroup>` : ''; };
+  sel.innerHTML = opt('', favs.length >= MAX_FAVORIS ? `Maximum ${MAX_FAVORIS} équipes` : '➕ Ajouter une équipe…') + groupe('Top 14', equipes?.top14) + groupe('Pro D2', equipes?.prod2);
+  sel.value = '';
+  sel.disabled = equipesEnCours || favs.length >= MAX_FAVORIS;
 
   $('#notifMsg').textContent = notif.msg
     || (notifBloquee() ? 'Notifications bloquées : autorise-les pour ce site dans les réglages du téléphone.'
       : equipesEnCours ? 'Chargement des équipes…'
-      : notif.abonne ? 'Active : mise à jour à chaque score, même appli fermée.'
-      : notif.support && notif.serveur?.actif ? 'Choisis ton équipe pour activer la notification.' : '');
+      : notif.abonne ? 'Activées : tu es prévenu des matchs en direct (championnats cochés + équipes favorites), même appli fermée. Le nombre de matchs en direct s’affiche sur l’icône.'
+      : notif.support && notif.serveur?.actif ? 'Active l’interrupteur pour être prévenu. Tes équipes favorites servent aussi à la carte « Prochain match ».' : '');
 }
 
 async function initNotif() {
@@ -278,10 +353,9 @@ async function remplirEquipes() {
   equipesEnCours = true; renderNotif();
   try {
     equipes = await charger('/api/equipes');
-    const fav = stock.lire('equipeFavorite');
-    if (equipes.complet && fav && ![...equipes.top14, ...equipes.prod2].includes(fav)) {
-      stock.ecrire('equipeFavorite', ''); // ex. une équipe nationale choisie dans une ancienne version : plus possible
-      if (notif.abonne) resynchroniser();
+    if (equipes.complet) { // un favori qui n'existe plus dans la liste (ex. ancienne équipe nationale) est retiré
+      const valides = new Set([...equipes.top14, ...equipes.prod2]), f = favoris(), garde = f.filter(n => valides.has(n));
+      if (garde.length !== f.length) { ecrireFavoris(garde); if (notif.abonne) resynchroniser(); render(); }
     }
   } catch { /* réessayé à la prochaine ouverture du menu */ }
   equipesEnCours = false; renderNotif();
@@ -301,16 +375,36 @@ $('#cloche').addEventListener('click', () => {
 document.addEventListener('click', e => { if (!$('#menuNotif').hidden && !e.target.closest('#menuNotif, #cloche')) ouvrirMenu(false); });
 addEventListener('keydown', e => { if (e.key === 'Escape') ouvrirMenu(false); });
 
-$('#fav').addEventListener('change', async () => {
-  const v = $('#fav').value;
-  if (v === '') { if (notif.abonne) await couperNotif(); return; }
-  stock.ecrire('equipeFavorite', v === '*' ? '' : v);
-  if (notif.abonne) { renderNotif(); await resynchroniser(); } else await activerNotif();
+// Interrupteur général
+$('#notifOn').addEventListener('change', e => { if (e.target.checked) activerNotif(); else couperNotif(); });
+
+// Championnats suivis
+$('#champs').addEventListener('change', () => {
+  ecrireListe('champsNotif', [...document.querySelectorAll('#champs input')].filter(i => i.checked).map(i => i.dataset.champ));
+  renderNotif(); majPastille(); if (notif.abonne) resynchroniser();
+});
+
+// Équipes favorites : ajout (menu) et retrait (croix)
+function changerFavoris(l) {
+  ecrireFavoris(l); renderNotif(); render(); majPastille();
+  if (notif.abonne) resynchroniser();
+  chargerCalendriersFavoris();
+}
+$('#fav').addEventListener('change', () => {
+  const v = $('#fav').value, f = favoris();
+  if (v && !f.includes(v) && f.length < MAX_FAVORIS) changerFavoris([...f, v]); else renderNotif();
+});
+$('#favListe').addEventListener('click', e => {
+  const n = e.target.closest('[data-retirer]')?.dataset.retirer;
+  if (n) changerFavoris(favoris().filter(x => x !== n));
 });
 
 // Polling : toutes les 30 s tant que l'appli est visible (le serveur, lui, protège le quota grâce à son cache).
 // Le calendrier n'est relu chez le serveur que s'il n'est pas encore arrivé, puis toutes les 10 minutes (scores fusionnés).
-const rafraichir = () => { majMatchs(); if (!calendrierAJour(comp)) majCalendrier(); };
+// Les calendriers du Top 14 et de la Pro D2 servent aussi à la carte « Prochain match » dès qu'une équipe est en favori.
+const calendriersUtiles = () => [...new Set([comp, ...(favoris().length ? ['top14', 'prod2'] : [])])];
+const chargerCalendriersFavoris = () => calendriersUtiles().forEach(k => { if (!calendrierAJour(k)) majCalendrier(k); });
+const rafraichir = () => { majMatchs(); chargerCalendriersFavoris(); };
 rafraichir();
 initNotif();
 setInterval(() => { if (document.visibilityState === 'visible') rafraichir(); }, 30000);
